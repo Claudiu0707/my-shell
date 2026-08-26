@@ -1,0 +1,29 @@
+Tokenization part
+- split input based on delimiters (spaces)
+- respect quotes('/") and escape "\" characters
+
+- the "\" rules
+    - the following are interpreted as follows:
+        - \" => "
+        - \\ => \
+        - \$ => $
+        - \` => `
+    - others like:
+        - \n => '\' 'n'
+        - etc.
+        
+
+'...' = single quote: no expansion, no escape
+"..." = double quote: allows $VAR exapnsion (we'll see) and \n, \t honouring 
+
+- Control characters
+    - | = pipe the output of one command to the input of another command
+    - & = async execution in a sub-shell (**to be seen)
+    - ; = separate multiple commands (idea: create a new TOKEN_DS)
+    - < = redirect input from the file instead of the stdin ( < file.txt)
+    - > = redirect output instead not to the stdout but to the file (> file.txt) (overwriting the file content)
+    - $ = 
+- Compund characters
+    - >> = append the stdout to the file ( >> file.txt)
+    - || = executes the second command only if the first one fails   (i.e. exit status is not 0)
+    - && = executes the second command only if the first one succeds (i.e. exit status is 0)

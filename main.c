@@ -3,117 +3,221 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include "lexer.h"
 
 #define MAX_LENGTH 1024
 
 #define EXIT_SUCCESS 0
 #define SUCCESS 0
+#define FAILURE -1
 
-#define CRITICAL_ERROR -1000
-/*
-    token_string = contains the token itself
-    in_quotes = signals if a special segment is active (e.g. echo "message in quotes is a whole segment")
-        - where I use it: in the above e.g., during token separation, If in quotes, I treat ' ' chars as regular chars
-*/
 
-struct TOKEN {
-    char* token_buffer;
-    int used_buffer_size;
-    int total_buffer_size;
-    bool in_quotes; 
-};
+/*************************************************************************************
+*************************************************************************************/
 
-struct TOKEN_DS {
-    struct TOKEN* token;
-    size_t used_size;
-    size_t total_size;
-};
+bool should_increment_token_ds(struct TOKEN_DS* token_ds) {
+    return token_ds->used_size > token_ds->total_size;
+}
 
+bool should_increment_token_buffer(struct TOKEN* current_token) {
+    return current_token->used_buffer_size > current_token->total_buffer_size;
+}
 
 /*************************************************************************************
 *************************************************************************************/
 int initialize_token_ds(struct TOKEN_DS* token_ds, size_t size);
-int double_token_space(struct TOKEN_DS* token_ds);
+int increment_token_space(struct TOKEN_DS* token_ds);
 
 int initialize_token(struct TOKEN* token, size_t size);
 int double_token_buffer(struct TOKEN* token);
+
+void display_token_ds(struct TOKEN_DS* token_ds);
+
+operator_type_t get_operator_from_char(char* a, char* b) {
+    if (b != NULL) {
+        if (*a == '|' && *b == '|') 
+            return OP_OR;
+        if (*a == '&' && *b == '&')
+            return OP_AND;
+        if (*a == '>' && *b == '>')
+            return OP_DGREATER_THAN;
+    }
+    switch (*a) {
+        case '|':
+            return OP_PIPE;
+        case '&':
+            return OP_AMPERSAND;
+        case ';':
+            return OP_SEMICOLON;
+        case '<':
+            return OP_LOWER_THAN;
+        case '>':
+            return OP_GREATER_THAN;
+        default:
+            return OP_GENERAL;
+    }
+}
 /*************************************************************************************
 *************************************************************************************/
-
 
 /*
     The caller must free the memory allocated for tokens
 
     @return number of tokens on sucess, -1 on failure
 */
-int msh_tokenizer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
+
+const int msh_lexer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
     int function_result = SUCCESS;
 
-    int cur_char_index = 0;
-    char current_char;
-    int found_tokens_count = 0;
-    int token_index = 0;
+    unsigned int current_char_index = 0;
+    unsigned int current_token_index = 0;
     bool has_token = false;
-    
+
     struct TOKEN* current_token = NULL;
-    // Initialize with default size 8
-    if((function_result = initialize_token_ds(token_ds, 8)) != SUCCESS) 
+    if ((function_result = initialize_token_ds(token_ds, 4)) != SUCCESS) {
         goto cleanup;
-
-    while (cur_char_index < line_length) {
-        current_char = line[cur_char_index];
-        // Consume non-token white spaces
-        if (!has_token && current_char == ' ') {
-            cur_char_index++;
-            continue;
-        }
-        // Finished extracting a token
-        if (has_token && current_char == ' ' && !current_token->in_quotes) {
-            has_token = false;
-            current_token = false;
-            token_index++;
-            cur_char_index++;
-            continue;
-        } 
-        // Detected a token
-        if (!has_token && current_char != ' ') {
-            has_token = true;
-            token_ds->used_size++;
-            if (token_ds->used_size > token_ds->total_size) {
-                if ((function_result = double_token_space(token_ds)) != SUCCESS) 
-                    goto cleanup;
-            }
-            
-            current_token = &token_ds->token[token_index];
-
-            if ((function_result = initialize_token(current_token, MAX_LENGTH)) != SUCCESS)
-                goto cleanup;
-        }
-
-        // Process the token
-        // TODO allow escaping characters
-        if (has_token && current_char != ' ') {
-            if (current_char == '"') {
-                if (current_token->in_quotes) 
-                    current_token->in_quotes = false;
-                else 
-                    current_token->in_quotes = true;
-                    continue;
-            }
-
-            if (current_token->used_buffer_size > current_token->total_buffer_size) {
-                if ((function_result = double_token_buffer(current_token)) != SUCCESS) 
-                    goto cleanup;
-            }
-
-            current_token->token_buffer[current_token->used_buffer_size] = current_char;
-            current_token->used_buffer_size++;
-        }
     }
 
+    while (current_char_index < line_length) {
+        char current_char = line[current_char_index];
+        char next_char;
+
+        operator_type_t type;
+        if (current_char_index + 1 < line_length) {
+            next_char = line[current_char_index+1];
+            type = get_operator_from_char(&current_char, &next_char);
+        }
+        else type = get_operator_from_char(&current_char, NULL);
+        
+        // Consume non-token white spaces
+        if (has_token == false && current_char == SPACE) {
+            current_char_index++;
+            continue;
+        }
+
+        if (type == OP_GENERAL) {
+            // Start of a token was detected
+            if (has_token == false && current_char != SPACE) {
+                has_token = true;
+                token_ds->used_size++;
+                if (should_increment_token_ds(token_ds)) {
+                    if ((function_result = increment_token_space(token_ds)) != SUCCESS) {
+                        goto cleanup;
+                    }
+                }
+                current_token = &token_ds->token[current_token_index];
+                if ((function_result = initialize_token(current_token, MAX_LENGTH)) != SUCCESS) {
+                    goto cleanup;
+                }
+            }
+
+            // End of a token was reached
+            if (has_token == true && current_char == SPACE && 
+                (current_token->state != IN_DQUOTES && current_token->state != IN_QUOTES) )
+            {
+                has_token = false;
+                current_token->type = WORD;
+                current_token = NULL;
+                current_token_index++;
+                current_char_index++;
+                continue;
+            }
+
+            // Process the token
+            if (has_token == true) {
+                switch(current_char) {
+                    case '\"':
+                        if (current_token->state == IN_DQUOTES) {
+                            current_token->state = NORMAL_STATE;
+                        } else {
+                            current_token->state = IN_DQUOTES; 
+                        } 
+                        current_char_index++;
+                        continue;
+                        break;
+                    case '\'':
+                        if (current_token->state == IN_QUOTES) {
+                            current_token->state = NORMAL_STATE;
+                        } else {
+                            current_token->state = IN_QUOTES; 
+                        } 
+                        current_char_index++;
+                        continue;
+                        break;
+                    default:
+                        break;
+                }
+
+                if (should_increment_token_buffer(current_token)) {
+                    if ((function_result = double_token_buffer(current_token)) != SUCCESS) {
+                        goto cleanup;
+                    }
+                }
+                current_token->token_buffer[current_token->used_buffer_size] = current_char;
+                current_token->used_buffer_size++;
+                current_char_index++;
+            }
+         } else {
+                if (has_token && current_token != NULL && current_token->state == NORMAL_STATE) {
+                    // Finish processing the word token
+                    has_token = false;
+                    current_token->type = WORD;
+                    current_token = NULL;
+                    current_token_index++;
+                    current_char_index++;
+                }
+                
+                if (has_token == false) {
+                    // The operator itself is a special token
+                    token_ds->used_size++;
+                    if (should_increment_token_ds(token_ds) == true) {
+                        if ((function_result = increment_token_space(token_ds)) != SUCCESS) {
+                            goto cleanup;
+                        }
+                    }
+                    current_token = &token_ds->token[current_token_index++];
+                    if ((function_result = initialize_token(current_token, MAX_LENGTH)) != SUCCESS) {
+                        goto cleanup;
+                    }
+
+                    if (type == OP_OR || type == OP_AND || type == OP_DGREATER_THAN) {
+                        // Special operator with 2 chars
+                        if (should_increment_token_buffer(current_token)) {
+                            if ((function_result = double_token_buffer(current_token)) != SUCCESS) {
+                                goto cleanup;
+                            }
+                        }
+                        current_token->token_buffer[current_token->used_buffer_size] = current_char;
+                        current_token->used_buffer_size++;
+                        current_char_index++;
+                        if (should_increment_token_buffer(current_token)) {
+                            if ((function_result = double_token_buffer(current_token)) != SUCCESS) {
+                                goto cleanup;
+                            }
+                        }
+                        current_token->token_buffer[current_token->used_buffer_size] = next_char;
+                        current_token->used_buffer_size++;
+                        current_char_index++;
+                    } else {
+                        // Special operator with 1 char
+                        if (should_increment_token_buffer(current_token)) {
+                            if ((function_result = double_token_buffer(current_token)) != SUCCESS) {
+                                goto cleanup;
+                            }
+                        }
+                        current_token->token_buffer[current_token->used_buffer_size] = current_char;
+                        current_token->used_buffer_size++;
+                        current_char_index++;
+                    }
+                }
+
+                current_token->type = OPERATOR;
+        }
+    }
     cleanup:
     return function_result;
 }
+
 
 int msh_loop() {
     char* line = NULL;
@@ -122,8 +226,17 @@ int msh_loop() {
     errno = 0;
 
     struct TOKEN_DS token_ds;
-    while ((nread = getline(&line, &size, stdin)) != -1) {
-        msh_tokenizer(&token_ds, line, size);
+    while (true) {
+        printf("> ");
+        if ((nread = getline(&line, &size, stdin)) == -1) {
+            exit(1);
+        }
+        line[size-2] = '\0';
+        msh_lexer(&token_ds, line, size);
+        printf("FULL INPUT: %s\n", line);
+        display_token_ds(&token_ds);
+        free(line);
+        size = 0;
     }
 
     if (line) free(line);
@@ -146,30 +259,32 @@ int initialize_token_ds(struct TOKEN_DS* token_ds, size_t size) {
     token_ds->used_size = 0;
     token_ds->token = NULL;
 
-    token_ds->token = (struct TOKEN* ) calloc(token_ds->total_size, sizeof(struct TOKEN));
+    token_ds->token = (struct TOKEN*) calloc(token_ds->total_size, sizeof(struct TOKEN));
     if (token_ds->token == NULL) 
-        return CRITICAL_ERROR;
+        return FAILURE;
     return SUCCESS;
 }
 
-int double_token_space(struct TOKEN_DS* token_ds) {
+int increment_token_space(struct TOKEN_DS* token_ds) {
     struct TOKEN* new_tokens = NULL;
-    new_tokens = (struct TOKEN* ) realloc(token_ds->token, token_ds->total_size * 2);
+    int new_size = token_ds->total_size + 4;
+    new_tokens = (struct TOKEN* ) realloc(token_ds->token, sizeof(struct TOKEN) * new_size);
     if (new_tokens ==  NULL) 
-        return CRITICAL_ERROR;
-    token_ds->total_size *= 2;
-    free(token_ds->token);
+        return FAILURE;
+    token_ds->total_size += 4;
     token_ds->token = new_tokens;
     return SUCCESS;
 }
 
 int initialize_token(struct TOKEN* token, size_t size) {
     token->token_buffer = (char*) calloc(size, sizeof(char));
-    if (token->token_buffer == NULL) 
-        return CRITICAL_ERROR;
+    if (token->token_buffer == NULL) {
+        return FAILURE;
+    }
 
     token->used_buffer_size = 0;
     token->total_buffer_size = size;
+    token->state = NORMAL_STATE;
     return SUCCESS;
 }
 
@@ -177,14 +292,20 @@ int double_token_buffer(struct TOKEN* token) {
     char* new_buffer = NULL;
     new_buffer = realloc(token->token_buffer, token->total_buffer_size * 2);
     if (new_buffer == NULL) 
-        return CRITICAL_ERROR;
+        return FAILURE;
 
     token->total_buffer_size *= 2;
-    free(token->token_buffer);
     token->token_buffer = new_buffer;
     return SUCCESS;
 }
 
-int free_tokens(struct TOKEN_DS tokens) {
 
+void display_token_ds(struct TOKEN_DS* token_ds) {
+    printf("TOKENIZED COMMAND:\n");
+    for (int i = 0; i < token_ds->used_size; i++) {
+        printf("Token: %s | Type: ", token_ds->token[i].token_buffer);
+        if (token_ds->token[i].type == WORD) printf("WORD\n");
+        else printf("OPERATOR\n");
+    }
 }
+
