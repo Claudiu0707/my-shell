@@ -19,7 +19,7 @@ bool should_increment_token_ds(struct TOKEN_DS* token_ds) {
     return token_ds->used_size > token_ds->total_size;
 }
 
-bool should_increment_token_buffer(struct TOKEN* current_token) {
+bool should_increment_token_buffer(TOKEN* current_token) {
     return current_token->used_buffer_size > current_token->total_buffer_size;
 }
 
@@ -28,8 +28,8 @@ bool should_increment_token_buffer(struct TOKEN* current_token) {
 int initialize_token_ds(struct TOKEN_DS* token_ds, size_t size);
 int increment_token_space(struct TOKEN_DS* token_ds);
 
-int initialize_token(struct TOKEN* token, size_t size);
-int double_token_buffer(struct TOKEN* token);
+int initialize_token(TOKEN* token, size_t size);
+int double_token_buffer( TOKEN* token);
 
 void display_token_ds(struct TOKEN_DS* token_ds);
 
@@ -41,6 +41,8 @@ operator_type_t get_operator_from_char(char* a, char* b) {
             return OP_AND;
         if (*a == '>' && *b == '>')
             return OP_DGREATER_THAN;
+        if (*a == '&' && *b == '>')
+            return OP_AMPERSANDGREATER;
     }
     switch (*a) {
         case '|':
@@ -73,7 +75,7 @@ const int msh_lexer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
     unsigned int current_token_index = 0;
     bool has_token = false;
 
-    struct TOKEN* current_token = NULL;
+    TOKEN* current_token = NULL;
     if ((function_result = initialize_token_ds(token_ds, 4)) != SUCCESS) {
         goto cleanup;
     }
@@ -95,7 +97,7 @@ const int msh_lexer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
             continue;
         }
 
-        if (type == OP_GENERAL) {
+        if (type == OP_GENERAL || (type != OP_GENERAL && current_token != NULL && current_token->state != NORMAL_STATE)) {
             // Start of a token was detected
             if (has_token == false && current_char != SPACE) {
                 has_token = true;
@@ -117,6 +119,7 @@ const int msh_lexer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
             {
                 has_token = false;
                 current_token->type = WORD;
+                current_token->op_type = type;
                 current_token = NULL;
                 current_token_index++;
                 current_char_index++;
@@ -129,20 +132,24 @@ const int msh_lexer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
                     case '\"':
                         if (current_token->state == IN_DQUOTES) {
                             current_token->state = NORMAL_STATE;
-                        } else {
+                            current_char_index++;
+                            continue;
+                        } else if (current_token->state == NORMAL_STATE) {
                             current_token->state = IN_DQUOTES; 
+                            current_char_index++;
+                            continue;
                         } 
-                        current_char_index++;
-                        continue;
                         break;
                     case '\'':
                         if (current_token->state == IN_QUOTES) {
-                            current_token->state = NORMAL_STATE;
-                        } else {
+                            current_token->state = NORMAL_STATE; 
+                            current_char_index++;
+                            continue;
+                        } else if (current_token->state == NORMAL_STATE) {
                             current_token->state = IN_QUOTES; 
+                            current_char_index++;
+                            continue;
                         } 
-                        current_char_index++;
-                        continue;
                         break;
                     default:
                         break;
@@ -162,6 +169,7 @@ const int msh_lexer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
                     // Finish processing the word token
                     has_token = false;
                     current_token->type = WORD;
+                    current_token->op_type = type;
                     current_token = NULL;
                     current_token_index++;
                     current_char_index++;
@@ -212,6 +220,7 @@ const int msh_lexer(struct TOKEN_DS* token_ds, char* line, size_t line_length) {
                 }
 
                 current_token->type = OPERATOR;
+                current_token->op_type = type;
         }
     }
     cleanup:
@@ -231,8 +240,8 @@ int msh_loop() {
         if ((nread = getline(&line, &size, stdin)) == -1) {
             exit(1);
         }
-        line[size-2] = '\0';
-        msh_lexer(&token_ds, line, size);
+        line[nread-1] = '\0';
+        msh_lexer(&token_ds, line, nread-1);
         printf("FULL INPUT: %s\n", line);
         display_token_ds(&token_ds);
         free(line);
@@ -259,16 +268,16 @@ int initialize_token_ds(struct TOKEN_DS* token_ds, size_t size) {
     token_ds->used_size = 0;
     token_ds->token = NULL;
 
-    token_ds->token = (struct TOKEN*) calloc(token_ds->total_size, sizeof(struct TOKEN));
+    token_ds->token = (TOKEN*) calloc(token_ds->total_size, sizeof(TOKEN));
     if (token_ds->token == NULL) 
         return FAILURE;
     return SUCCESS;
 }
 
 int increment_token_space(struct TOKEN_DS* token_ds) {
-    struct TOKEN* new_tokens = NULL;
+    TOKEN* new_tokens = NULL;
     int new_size = token_ds->total_size + 4;
-    new_tokens = (struct TOKEN* ) realloc(token_ds->token, sizeof(struct TOKEN) * new_size);
+    new_tokens = (TOKEN* ) realloc(token_ds->token, sizeof(TOKEN) * new_size);
     if (new_tokens ==  NULL) 
         return FAILURE;
     token_ds->total_size += 4;
@@ -276,7 +285,7 @@ int increment_token_space(struct TOKEN_DS* token_ds) {
     return SUCCESS;
 }
 
-int initialize_token(struct TOKEN* token, size_t size) {
+int initialize_token(TOKEN* token, size_t size) {
     token->token_buffer = (char*) calloc(size, sizeof(char));
     if (token->token_buffer == NULL) {
         return FAILURE;
@@ -288,7 +297,7 @@ int initialize_token(struct TOKEN* token, size_t size) {
     return SUCCESS;
 }
 
-int double_token_buffer(struct TOKEN* token) {
+int double_token_buffer(TOKEN* token) {
     char* new_buffer = NULL;
     new_buffer = realloc(token->token_buffer, token->total_buffer_size * 2);
     if (new_buffer == NULL) 
@@ -305,7 +314,25 @@ void display_token_ds(struct TOKEN_DS* token_ds) {
     for (int i = 0; i < token_ds->used_size; i++) {
         printf("Token: %s | Type: ", token_ds->token[i].token_buffer);
         if (token_ds->token[i].type == WORD) printf("WORD\n");
-        else printf("OPERATOR\n");
+        else {
+            printf("OPERATOR: ");
+            switch(token_ds->token[i].op_type) {
+                case OP_LOWER_THAN:
+                    printf("<\n");
+                    break;  
+                case OP_GREATER_THAN:
+                    printf(">\n");
+                    break;
+                case OP_DGREATER_THAN:
+                    printf(">>\n");
+                    break;
+                case OP_AMPERSANDGREATER:
+                    printf("&>\n");
+                    break;
+                default:
+                    printf("other\n");
+            }
+        }
     }
 }
 
